@@ -99,12 +99,18 @@ def worst_key(row):
     hv = row.get("Number_helpful", 0) if "Number_helpful" in row else 0
     return (m, -hv)
 
+def rank_group(g):
+    # create a temporary score column based on worst_key
+    g = g.copy()
+    g["_rank"] = g.apply(worst_key, axis=1)
+    return g.sort_values("_rank").head(15).drop(columns="_rank")
+
 top_bad_by_country = (
     neg_df
-    .sort_values(by=["Country"], kind="stable", key=None)
     .groupby("Country", group_keys=False)
-    .apply(lambda g: g.sort_values(by=g.index.map(lambda i: worst_key(g.loc[i]))).head(15))
+    .apply(rank_group)
 )
+
 
 
 ISSUE_LABELS = [
@@ -124,41 +130,61 @@ def issue_tag_sentence(sentence: str):
     out = zshot(sentence, ISSUE_LABELS, hypothesis_template=ISSUE_HYP, multi_label=False)
     return {"label": out["labels"][0], "score": float(out["scores"][0])}
 
-def tag_top_bad_issues(df_top: pd.DataFrame, conf_thresh=0.50):
+def tag_top_bad_issues(df_top: pd.DataFrame, conf_thresh=0.55):
+    # If nothing to tag, return an empty frame with the right columns
+    if df_top is None or len(df_top) == 0:
+        return pd.DataFrame(columns=["Country", "Index", "sentence", "issue_label", "issue_score"])
+
+    # Bring grouping columns (like "Country") back as normal columns
+    g = df_top.reset_index(drop=False)
+
+    # In some pandas versions, Country can still hide in the index name; double-ensure
+    if "Country" not in g.columns:
+        g = g.reset_index(drop=False)
+    # After this, we should have "Country" as a column (or it will remain missing -> we handle later)
+
     rows = []
-    for idx, r in df_top.iterrows():
+    for _, r in g.iterrows():
+        country = r["Country"] if "Country" in r else None  # robust fallback
+
+        # r["privsec_sentiments"] is a list of dicts
         for s in r["privsec_sentiments"]:
-            if s["label"]=="negative":  # focus on the negative sentences
+            if s.get("label") == "negative":
                 tag = issue_tag_sentence(s["sentence"])
                 if tag["score"] >= conf_thresh:
                     rows.append({
-                        "Country": r["Country"],
-                        "Index": r.get("Index", None),
+                        "Country": country,
+                        "Index": r["Index"] if "Index" in r else None,
                         "sentence": s["sentence"],
                         "issue_label": tag["label"],
-                        "issue_score": tag["score"]
+                        "issue_score": float(tag["score"]),
                     })
-    return pd.DataFrame(rows)
+
+    # Always return a DataFrame with expected columns (even if empty)
+    return pd.DataFrame(rows, columns=["Country", "Index", "sentence", "issue_label", "issue_score"])
+
 
 issues_df = tag_top_bad_issues(top_bad_by_country, conf_thresh=0.55)
 
+if issues_df.empty or "Country" not in issues_df.columns:
+    print("No taggable negative privacy/security sentences were found (issues_df is empty).")
+    issues_by_country = pd.DataFrame(columns=["Country", "issue_label", "count"])
+    overall_issues = pd.DataFrame(columns=["issue_label", "count"])
+else:
+    issues_by_country = (
+        issues_df
+        .groupby(["Country", "issue_label"])
+        .size()
+        .reset_index(name="count")
+        .sort_values(["Country", "count"], ascending=[True, False])
+    )
 
-# Top issue categories per country
-issues_by_country = (
-    issues_df
-    .groupby(["Country","issue_label"])
-    .size()
-    .reset_index(name="count")
-    .sort_values(["Country","count"], ascending=[True,False])
-)
-
-# Overall top issues
-overall_issues = (
-    issues_df["issue_label"]
-    .value_counts()
-    .reset_index(name="count")
-    .rename(columns={"index":"issue_label"})
-)
+    overall_issues = (
+        issues_df["issue_label"]
+        .value_counts()
+        .reset_index(name="count")
+        .rename(columns={"index": "issue_label"})
+    )
 
 print(issues_by_country.head(20))
 print(overall_issues.head(10))
