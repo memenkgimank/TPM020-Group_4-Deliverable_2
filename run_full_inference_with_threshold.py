@@ -1,9 +1,69 @@
+"""
+run_full_inference_with_thresholds.py
+=====================================
+Purpose
+-------
+Run sentiment inference over the *entire* dataset using a single configuration
+you selected from tuning. Streams the CSV in chunks to control memory.
+
+What it does
+------------
+- Reads the input CSV in chunks (e.g., 20k rows at a time).
+- Applies your technical settings: max_length, chunk_long, agg, batch_size, fp16.
+- Applies your epistemic rule:
+  * argmax
+  * top_p (top class prob must exceed threshold; else 'uncertain')
+  * one_vs_rest (per-class thresholds; else 'uncertain')
+  * optional neutral collapsing
+- Writes output as a Parquet file with added columns:
+  pred_neg, pred_neu, pred_pos, pred_label_id, pred_label
+
+Inputs (CLI)
+------------
+--csv <path>                : full dataset CSV path
+--text_col <name>           : text column name (e.g., Review_body)
+--out <path>                : output Parquet path (e.g., predictions.parquet)
+--max_length <int>          : 128/256/384 (longer = more context, slower)
+--chunk_long {0,1}          : chunk long reviews (recommended 1)
+--agg {mean,max}            : chunk aggregation
+--batch_size <int>          : GPU/CPU memory trade-off
+--fp16 {0,1}                : 1 for GPU half precision; 0 for CPU
+--chunksize <int>           : CSV streaming chunk size (default 20000)
+--decision_mode <mode>      : argmax | top_p | one_vs_rest
+--top_p_threshold <float>   : used with top_p (e.g., 0.7)
+--ovr_threshold <float>     : used with one_vs_rest (e.g., 0.6)
+--collapse_neutral {0,1}    : merge neutral into pos/neg after decision
+
+Outputs
+-------
+- Parquet with original columns + predictions:
+  * pred_neg, pred_neu, pred_pos (probabilities)
+  * pred_label_id (0=neg, 1=neu, 2=pos, 3=uncertain)
+  * pred_label ("negative", "neutral", "positive", "uncertain")
+
+Example
+-------
+python run_full_inference_with_thresholds.py \
+  --csv Amazon_IoT_product_reviews.csv \
+  --text_col Review_body \
+  --out predictions.parquet \
+  --max_length 384 --chunk_long 1 --agg mean --batch_size 32 --fp16 1 \
+  --decision_mode top_p --top_p_threshold 0.7 --collapse_neutral 0
+
+Notes
+-----
+- For binary-only outputs, set --collapse_neutral 1.
+- If you hit OOM, try smaller --batch_size or lower --max_length.
+"""
+
 import argparse
 import numpy as np
 import pandas as pd
 from sentiment_infer import TwitterRobertaSentiment, InferenceConfig, LABELS
 # reuse epistemic rule function from the tuner
-from tune_with_thresholds import apply_decision_rules
+# NEW (matches your tuner filename)
+from tune_with_threshold import apply_decision_rules
+
 
 def batched(seq, n):
     buf = []

@@ -1,3 +1,69 @@
+"""
+tune_with_thresholds.py
+=======================
+Purpose
+-------
+Run "sample tuning" to find the best combination of:
+1) Technical settings (max_length, chunking, aggregation, batch_size), and
+2) Epistemic/decision settings (argmax vs. thresholds, uncertainty class, neutral collapsing).
+
+No training occurs. We only test ways to *use* the pretrained model.
+
+What it does
+------------
+- Loads a CSV and samples N rows (e.g., 3,000).
+- Runs inference with many configurations.
+- Applies decision rules:
+  * argmax
+  * top_p (only accept top class if prob >= threshold; else label=uncertain)
+  * one_vs_rest (per-class threshold; else uncertain)
+  * optional collapse_neutral (merge neutral into pos/neg)
+- If a label column is provided:
+  * Maps ratings 1–2→neg(0), 3→neu(1), 4–5→pos(2).
+  * Computes Macro-F1 / Accuracy on the confidently labeled subset.
+- Saves results to: `tuning_results_tech_and_epistemic.csv`, sorted by Macro-F1, Accuracy, kept_fraction.
+
+Inputs (CLI)
+------------
+--csv <path>            : path to reviews CSV
+--text_col <name>       : text column (e.g., Review_body)
+--label_col <name>      : optional label/rating column (e.g., Rating)
+--n_samples <int>       : sample size to tune on (default 2000)
+
+Technical grid (CLI)
+--------------------
+--max_lengths 128 256 384
+--chunk_long_opts 0 1
+--agg_opts mean max
+--batch_sizes 16 32
+
+Epistemic grid (CLI)
+--------------------
+--decision_modes argmax top_p one_vs_rest
+--top_p_thresholds 0.6 0.7
+--ovr_thresholds 0.6 0.7
+--collapse_neutral_opts 0 1
+
+Outputs
+-------
+- CSV `tuning_results_tech_and_epistemic.csv` with columns:
+  [max_length, chunk_long, agg, batch_size,
+   decision_mode, top_p_threshold, ovr_threshold, collapse_neutral,
+   macro_f1_3class_filtered, acc_3class_filtered, kept_fraction, ... ]
+
+How to pick a config
+--------------------
+- Prefer higher Macro-F1; break ties with Accuracy.
+- Check kept_fraction (coverage): if too low, lower thresholds.
+
+Example
+-------
+python tune_with_thresholds.py \
+  --csv Amazon_IoT_product_reviews.csv \
+  --text_col Review_body \
+  --label_col Rating \
+  --n_samples 3000
+"""
 import argparse
 import numpy as np
 import pandas as pd
